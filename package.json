@@ -1,0 +1,18 @@
+{
+  "name": "discord-fight-night-bot",
+  "version": "1.0.0",
+  "description": "Comprehensive Fight Night Discord bot with matchmaking and Google Sheets integration",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "deploy": "node deploy-commands.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "googleapis": "^128.0.0",
+    "dotenv": "^16.3.1"
+  },
+  "keywords": ["discord", "bot", "matchmaking", "google-sheets"],
+  "author": "Fight Night Team",
+  "license": "MIT"
+}
