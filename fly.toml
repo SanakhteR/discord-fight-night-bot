@@ -1,0 +1,27 @@
+app = "discord-fight-night-bot"
+primary_region = "dfw"
+
+[build]
+
+[env]
+  NODE_ENV = "production"
+
+[processes]
+  app = "node index.js"
+
+[[services]]
+  internal_port = 3000
+  processes = ["app"]
+  protocol = "tcp"
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+[mounts]
+  source = "bot_data"
+  destination = "/app/data"
