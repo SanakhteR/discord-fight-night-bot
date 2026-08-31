@@ -1,0 +1,47 @@
+# Node modules (will be installed during build)
+node_modules/
+
+# Environment files (secrets should be in fly.io secrets)
+.env
+.env.*
+
+# Git
+.git/
+.gitignore
+
+# Backups
+backups/
+
+# Documentation
+*.md
+!README.md
+
+# Test files
+test*.js
+test-components.js
+debug-env.js
+
+# Backup scripts
+backup*.js
+restore*.js
+list-backups.js
+delete-backup.js
+cleanup-old-backups.js
+schedule-backup.bat
+backup-menu.bat
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp

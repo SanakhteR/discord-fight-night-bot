@@ -23,13 +23,6 @@ module.exports = {
             });
         }
         
-        // Check channel
-        if (interaction.channel.name !== 'fightnightmods') {
-            return await interaction.reply({
-                content: '❌ This command can only be used in the #fightnightmods channel.',
-                ephemeral: true
-            });
-        }
         
         try {
             await interaction.deferReply();
@@ -738,12 +731,13 @@ module.exports = {
             // Add new player to Google Sheets
             const newPlayerData = {
                 username: interaction.user.username,  // Column A - Discord Username
-                realName: playerName,                 // Column B - Real Name
-                riotId: riotId,                      // Column C - Riot ID
-                estimatedElo: session.estimatedRank, // Column D - Elo
-                mmr: mmr,                            // Column E - MMR
-                primaryRole: session.primaryRole,    // Column F - Primary Role
-                secondaryRole: session.secondaryRole // Column G - Secondary Role
+                fullName: playerName,                 // Column B & C - First word and full name
+                riotId: riotId,                      // Column D - Riot ID
+                isRioter: session.isRioter || false, // Column E - Rioter (Yes/No)
+                estimatedElo: session.estimatedRank, // Stored elsewhere
+                mmr: mmr,                            // Column G - MMR
+                primaryRole: session.primaryRole,    // Column H - Primary Role
+                secondaryRole: session.secondaryRole // Column I - Secondary Role
             };
             
             await googleSheetsService.addNewPlayer(newPlayerData);
@@ -808,7 +802,71 @@ module.exports = {
                 });
             }
             
-            // Show Riot ID and Name input modal since we now have both roles
+            // Ask if user is a Rioter before showing Riot ID/Name modal
+            const { ButtonBuilder, ButtonStyle, ActionRowBuilder } = require('discord.js');
+            
+            const row = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`rioter_yes_${userId}`)
+                        .setLabel('Yes')
+                        .setStyle(ButtonStyle.Success),
+                    new ButtonBuilder()
+                        .setCustomId(`rioter_no_${userId}`)
+                        .setLabel('No')
+                        .setStyle(ButtonStyle.Danger)
+                );
+            
+            await interaction.update({
+                content: `🎮 **New Player Setup**\n\n✅ Estimated Rank: **${session.estimatedRank}**\n✅ Primary Role: **${session.primaryRole}**\n✅ Secondary Role: **${selectedSecondaryRole}**\n\nAre you a Rioter? (Do you work at Riot Games?)`,
+                components: [row]
+            });
+            
+            // Update session with selected secondary role
+            interaction.client.verificationSessions.set(userId, {
+                ...session,
+                step: 'rioter_question',
+                secondaryRole: selectedSecondaryRole
+            });
+            
+            await debug.info(`**Verification**: User ${interaction.user.username} selected secondary role: ${selectedSecondaryRole}, showing Rioter question`);
+            
+        } catch (error) {
+            console.error('Error in handleSecondaryRoleSelection:', error);
+            await debug.error(`**Verification**: Error in secondary role selection: ${error.message}`);
+            await interaction.reply({
+                content: '❌ An error occurred during secondary role selection.',
+                ephemeral: true
+            });
+        }
+    },
+
+    async handleRioterButton(interaction) {
+        const debug = debugLogger.createLogger(interaction.guild);
+        
+        try {
+            const userId = interaction.customId.split('_')[2];
+            const response = interaction.customId.split('_')[1]; // 'yes' or 'no'
+            
+            // Check if this is the correct user
+            if (interaction.user.id !== userId) {
+                return await interaction.reply({
+                    content: '❌ This prompt is not for you.',
+                    ephemeral: true
+                });
+            }
+            
+            const session = interaction.client.verificationSessions.get(userId);
+            if (!session) {
+                return await interaction.reply({
+                    content: '❌ Verification session not found or expired.',
+                    ephemeral: true
+                });
+            }
+            
+            const isRioter = response === 'yes';
+            
+            // Show Riot ID and Name input modal
             const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require('discord.js');
             
             const modal = new ModalBuilder()
@@ -827,7 +885,7 @@ module.exports = {
                 .setLabel('What is your name?')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(true)
-                .setPlaceholder('Enter your real name or preferred name');
+                .setPlaceholder('Enter your full name');
             
             const firstActionRow = new ActionRowBuilder().addComponents(riotIdInput);
             const secondActionRow = new ActionRowBuilder().addComponents(nameInput);
@@ -835,22 +893,24 @@ module.exports = {
             
             await interaction.showModal(modal);
             
-            // Update session with selected secondary role
+            // Update session with Rioter status
             interaction.client.verificationSessions.set(userId, {
                 ...session,
                 step: 'riot_id_new',
-                secondaryRole: selectedSecondaryRole
+                isRioter: isRioter
             });
             
-            await debug.info(`**Verification**: User ${interaction.user.username} selected secondary role: ${selectedSecondaryRole}`);
+            await debug.info(`**Verification**: User ${interaction.user.username} indicated they are ${isRioter ? '' : 'not '}a Rioter, showing Riot ID/Name modal`);
             
         } catch (error) {
-            console.error('Error in handleSecondaryRoleSelection:', error);
-            await debug.error(`**Verification**: Error in secondary role selection: ${error.message}`);
-            await interaction.reply({
-                content: '❌ An error occurred during secondary role selection.',
-                ephemeral: true
-            });
+            console.error('Error in handleRioterButton:', error);
+            await debug.error(`**Verification**: Error in Rioter button handler: ${error.message}`);
+            if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({
+                    content: '❌ An error occurred during registration.',
+                    ephemeral: true
+                });
+            }
         }
     }
 };

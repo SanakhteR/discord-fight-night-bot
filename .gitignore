@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Environment variables and sensitive files
+.env
+google-service-account-base64.txt
+credentials.json
+
+# Backups directory
+backups/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+temp/

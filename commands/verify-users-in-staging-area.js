@@ -23,13 +23,6 @@ module.exports = {
             });
         }
         
-        // Check channel
-        if (interaction.channel.name !== 'fightnightmods') {
-            return await interaction.reply({
-                content: '❌ This command can only be used in the #fightnightmods channel.',
-                ephemeral: true
-            });
-        }
         
         try {
             await interaction.deferReply();

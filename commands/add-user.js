@@ -50,12 +50,25 @@ module.exports = {
                 });
             }
             
-            // Find the Discord member to get display name
+            // Find the Discord member to get display name and real user ID.
+            // Fall back to a full guild member fetch if not in cache so we can
+            // store the real Discord ID (prevents duplicate entries when the
+            // user later joins the Fight Night Staging Area voice channel).
             const guild = interaction.guild;
-            const member = guild.members.cache.find(m => 
+            let member = guild.members.cache.find(m =>
                 m.user.username.toLowerCase() === username.toLowerCase()
             );
-            
+            if (!member) {
+                try {
+                    await guild.members.fetch();
+                    member = guild.members.cache.find(m =>
+                        m.user.username.toLowerCase() === username.toLowerCase()
+                    );
+                } catch (fetchErr) {
+                    console.error('add-user: error fetching guild members:', fetchErr);
+                }
+            }
+
             const displayName = member ? member.displayName : username;
             
             // Add user to Active Players List

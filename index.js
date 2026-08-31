@@ -1,5 +1,6 @@
 const { Client, GatewayIntentBits, Events, Collection, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { GoogleSheetsService } = require('./services/googleSheets');
+const cron = require('node-cron');
 
 const googleSheetsService = new GoogleSheetsService();
 const fs = require('fs');
@@ -22,6 +23,10 @@ client.commands = new Collection();
 client.activePlayersList = [];
 client.hereForPointsList = [];
 client.verificationSessions = new Map();
+client.seasonSchedule = null; // For storing the cron job
+client.offSeasonSchedule = null; // For storing the off season cron job
+client.checkInOpen = false; // Whether /check-in is currently accepting players
+client.checkInAutoOffTimeout = null; // Timeout handle for auto-disabling check-in
 
 // Load commands
 const commandsPath = path.join(__dirname, 'commands');
@@ -118,15 +123,41 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         const isInStaging = newState.channelId === stagingChannel.id;
         
         if (!wasInStaging && isInStaging) {
-            // User joined staging area
-            const playerData = {
-                userId: member.id,
-                username: member.user.username,
-                displayName: member.displayName,
-                joinTime: Date.now()
-            };
-            client.activePlayersList.push(playerData);
-            console.log(`${member.user.username} joined Fight Night Staging Area`);
+            // User joined staging area - only add if not already on the Active Players List.
+            // Dedupe by both userId AND username (case-insensitive) so manually-added
+            // entries (which may have a synthetic "manual_<ts>" userId) are still matched.
+            const memberUsernameLower = member.user.username.toLowerCase();
+            const existingIndex = client.activePlayersList.findIndex(p =>
+                p.userId === member.id ||
+                (p.username && p.username.toLowerCase() === memberUsernameLower)
+            );
+            if (existingIndex !== -1) {
+                // Backfill the real Discord userId on the existing entry so future
+                // leave-events and lookups work correctly.
+                const existing = client.activePlayersList[existingIndex];
+                if (existing.userId !== member.id) {
+                    existing.userId = member.id;
+                    existing.displayName = existing.displayName || member.displayName;
+                    console.log(`${member.user.username} joined Fight Night Staging Area - matched existing manual entry, backfilled userId`);
+                } else {
+                    console.log(`${member.user.username} joined Fight Night Staging Area but is already on the Active Players List - skipping add`);
+                }
+            } else {
+                const playerData = {
+                    userId: member.id,
+                    username: member.user.username,
+                    displayName: member.displayName,
+                    joinTime: Date.now()
+                };
+                client.activePlayersList.push(playerData);
+                console.log(`${member.user.username} joined Fight Night Staging Area`);
+
+                // Check if we hit a milestone (10th, 20th, 30th, etc. player)
+                const playerCount = client.activePlayersList.length;
+                if (playerCount % 10 === 0 && playerCount > 0) {
+                    await announcePlayerMilestone(guild, client.activePlayersList, playerCount);
+                }
+            }
             
         } else if (wasInStaging && !isInStaging) {
             // User left staging area
@@ -350,6 +381,19 @@ client.on(Events.InteractionCreate, async interaction => {
                     });
                 }
             }
+        } else if (interaction.customId.startsWith('rioter_')) {
+            try {
+                const verifyUsersCommand = require('./commands/verify-users');
+                await verifyUsersCommand.handleRioterButton(interaction);
+            } catch (error) {
+                console.error('Error handling rioter button:', error);
+                if (!interaction.replied && !interaction.deferred) {
+                    await interaction.reply({
+                        content: '❌ An error occurred during registration.',
+                        ephemeral: true
+                    });
+                }
+            }
         }
     } else if (interaction.isStringSelectMenu()) {
         // Handle dropdown selections
@@ -455,8 +499,16 @@ client.on(Events.InteractionCreate, async interaction => {
 client.on(Events.MessageCreate, async message => {
     if (message.author.bot) return;
     
+    // Check if message is in welcome channel
+    if (message.channel.name !== 'welcome') return;
+    
+    // Get existing session if any
     const session = client.verificationSessions.get(message.author.id);
-    if (!session || message.channel.name !== 'welcome') return;
+
+    // Only respond to messages from users who already have an active verification
+    // session (started by a moderator via /register-user). Do NOT auto-start
+    // registration just because someone posted in #welcome.
+    if (!session) return;
     
     // Find debug channel for status messages
     const debugChannel = message.guild.channels.cache.find(ch => ch.name === 'list-status-and-debug');
@@ -531,6 +583,118 @@ client.on(Events.MessageCreate, async message => {
         await message.reply('❌ An error occurred. Please contact a moderator.');
     }
 });
+
+// Helper function to announce player milestone
+async function announcePlayerMilestone(guild, activePlayersList, playerCount) {
+    try {
+        const generalChannel = guild.channels.cache.find(ch => ch.name === 'fight-night-general');
+        if (!generalChannel) {
+            console.error('fight-night-general channel not found');
+            return;
+        }
+
+        // Get the first N*10 players
+        const firstPlayers = activePlayersList.slice(0, playerCount);
+        
+        // Format player details
+        const playerDetails = [];
+        for (const player of firstPlayers) {
+            try {
+                const member = guild.members.cache.get(player.userId) || 
+                             await guild.members.fetch(player.userId).catch(() => null);
+                
+                const sheetData = await googleSheetsService.findPlayerByUsername(player.username);
+                
+                playerDetails.push({
+                    displayName: member ? member.displayName : player.displayName,
+                    username: player.username,
+                    joinTime: new Date(player.joinTime).toLocaleTimeString('en-US', { 
+                        timeZone: 'America/Los_Angeles',
+                        hour12: true,
+                        hour: 'numeric',
+                        minute: '2-digit',
+                        second: '2-digit'
+                    }),
+                    riotId: sheetData ? sheetData.riotId : 'Not found',
+                    mmr: sheetData ? sheetData.mmr : 'N/A',
+                    primaryRole: sheetData ? sheetData.primaryRole : 'N/A',
+                    secondaryRole: sheetData ? sheetData.secondaryRole : 'N/A',
+                    realName: sheetData ? sheetData.realName : 'N/A',
+                    isRioter: sheetData ? sheetData.isRioter : false
+                });
+            } catch (error) {
+                console.error(`Error getting data for player ${player.username}:`, error);
+                playerDetails.push({
+                    displayName: player.displayName,
+                    username: player.username,
+                    joinTime: new Date(player.joinTime).toLocaleTimeString('en-US', { 
+                        timeZone: 'America/Los_Angeles',
+                        hour12: true,
+                        hour: 'numeric',
+                        minute: '2-digit',
+                        second: '2-digit'
+                    }),
+                    riotId: 'Error loading',
+                    mmr: 'N/A',
+                    primaryRole: 'N/A',
+                    secondaryRole: 'N/A',
+                    realName: 'N/A',
+                    isRioter: false
+                });
+            }
+        }
+
+        // Build the message
+        let message = `🎯 **ATTENTION CONTESTANTS!** We now have **${playerCount} players** in the staging area!\n\n`;
+        message += `**The first ${playerCount} players are:**\n`;
+        message += formatPlayersList(playerDetails);
+
+        // Send message (handle chunking if needed)
+        if (message.length > 2000) {
+            const firstChunk = message.substring(0, 1900) + '...\n\n*(Continued in next message)*';
+            await generalChannel.send(firstChunk);
+            
+            let remainingMessage = message.substring(1900);
+            while (remainingMessage.length > 0) {
+                const chunk = remainingMessage.substring(0, 1900);
+                await generalChannel.send(chunk);
+                remainingMessage = remainingMessage.substring(1900);
+            }
+        } else {
+            await generalChannel.send(message);
+        }
+
+        console.log(`Announced ${playerCount} player milestone in fight-night-general`);
+    } catch (error) {
+        console.error('Error announcing player milestone:', error);
+    }
+}
+
+// Helper function to format players list
+function formatPlayersList(playerDetails) {
+    if (playerDetails.length === 0) {
+        return 'No players currently active.';
+    }
+    
+    let formatted = '';
+    
+    for (let i = 0; i < playerDetails.length; i++) {
+        const player = playerDetails[i];
+        const counter = i + 1;
+        const displayName = player.displayName || 'N/A';
+        const username = player.username || 'N/A';
+        const realName = player.realName || 'N/A';
+        const riotId = player.riotId || 'N/A';
+        const mmr = player.mmr ? player.mmr.toString() : 'N/A';
+        const joinTime = player.joinTime || 'N/A';
+        const rioterBadge = player.isRioter ? '🔷 ' : '';
+        
+        // Format: Counter - Rioter Badge Discord Display Name (Discord User Name / Real Name / Riot ID) - MMR - Join time
+        formatted += `${counter} - ${rioterBadge}${displayName} (${username} / ${realName} / ${riotId}) - MMR: ${mmr} - ${joinTime}\n`;
+    }
+    
+    return formatted;
+}
 
 // Graceful shutdown
 process.on('SIGINT', async () => {

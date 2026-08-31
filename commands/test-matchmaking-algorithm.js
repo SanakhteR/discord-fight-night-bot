@@ -27,13 +27,6 @@ module.exports = {
             });
         }
         
-        // Check channel
-        if (interaction.channel.name !== 'fightnightmods') {
-            return await interaction.reply({
-                content: '❌ This command can only be used in the #fightnightmods channel.',
-                ephemeral: true
-            });
-        }
         
         // Use centralized debug logger
         const debug = debugLogger.createLogger(interaction.guild);
@@ -54,7 +47,7 @@ module.exports = {
                     const hasRole = message.member.roles.cache.some(role => 
                         role.name === 'Moderator' || role.name === 'Admin' || role.name === 'Power'
                     );
-                    return hasRole && message.channel.name === 'fightnightmods' && !isNaN(parseInt(message.content));
+                    return hasRole && !isNaN(parseInt(message.content));
                 };
                 
                 try {
@@ -260,77 +253,183 @@ function formatTeam(team) {
 }
 
 async function runMatchmakingAlgorithm(players, numMatches, debug) {
-    const matches = [];
-    const availablePlayers = [...players];
+    if (debug) {
+        await debug.info(`**Test Matchmaking**: Starting advanced matchmaking algorithm with ${players.length} players for ${numMatches} matches`);
+    }
     
-    for (let matchIndex = 0; matchIndex < numMatches; matchIndex++) {
-        if (availablePlayers.length < 10) {
-            if (debug) {
-                await debug.warn(`**Test Matchmaking**: Breaking at match ${matchIndex + 1}: only ${availablePlayers.length} players remaining`);
-            }
-            break; // Not enough players for another match
-        }
+    // Generate multiple complete matchmaking scenarios and pick the best one
+    let bestScenario = null;
+    let bestScenarioScore = Infinity;
+    const numScenarios = 250; // Try 250 different complete scenarios
+    
+    for (let scenarioIndex = 0; scenarioIndex < numScenarios; scenarioIndex++) {
+        // Shuffle all players for this scenario
+        const shuffledPlayers = [...players].sort(() => Math.random() - 0.5);
+        const scenarioMatches = [];
+        const usedPlayerIds = new Set();
+        let scenarioValid = true;
         
-        if (debug) {
-            await debug.info(`**Test Matchmaking**: Creating match ${matchIndex + 1} with ${availablePlayers.length} available players`);
-        }
-        const matchPlayers = availablePlayers.splice(0, 10);
-        if (debug) {
-            await debug.info(`**Test Matchmaking**: Match ${matchIndex + 1}: Using 10 players, ${availablePlayers.length} remaining`);
-            // Show player roles for this match
-            const roleDistribution = {};
-            matchPlayers.forEach(p => {
-                const primary = p.primaryRole || 'Unknown';
-                const secondary = p.secondaryRole || 'Unknown';
-                roleDistribution[primary] = (roleDistribution[primary] || 0) + 1;
-            });
-            await debug.info(`**Test Matchmaking**: Match ${matchIndex + 1} role distribution: ${JSON.stringify(roleDistribution)}`);
-        }
-        
-        // Run optimization for this match
-        let bestMatch = null;
-        let bestScore = Infinity;
-        
-        // Try multiple iterations to find best match
-        for (let iteration = 0; iteration < 100; iteration++) {
-            const shuffled = [...matchPlayers].sort(() => Math.random() - 0.5);
-            const match = await createMatch(shuffled, null); // Don't debug every iteration
+        // Create all matches for this scenario
+        for (let matchIndex = 0; matchIndex < numMatches; matchIndex++) {
+            // Get 10 random unused players for this match
+            const availablePlayers = shuffledPlayers.filter(p => !usedPlayerIds.has(p.userId));
             
-            if (match) {
-                const score = calculateMatchScore(match);
-                if (score < bestScore) {
-                    bestScore = score;
-                    bestMatch = match;
+            if (availablePlayers.length < 10) {
+                scenarioValid = false;
+                break;
+            }
+            
+            // Try to create the best match with these 10 players
+            const matchPlayers = availablePlayers.slice(0, 10);
+            let bestMatch = null;
+            let bestMatchScore = Infinity;
+            
+            // Try multiple arrangements of these 10 players
+            for (let iteration = 0; iteration < 20; iteration++) {
+                const shuffled = [...matchPlayers].sort(() => Math.random() - 0.5);
+                const match = await createMatch(shuffled, null);
+                
+                if (match) {
+                    const score = calculateMatchScore(match);
+                    if (score < bestMatchScore) {
+                        bestMatchScore = score;
+                        bestMatch = match;
+                    }
+                }
+            }
+            
+            // If no match found, try with autofill
+            if (!bestMatch) {
+                const shuffled = [...matchPlayers].sort(() => Math.random() - 0.5);
+                bestMatch = await createMatch(shuffled, null, true);
+            }
+            
+            if (bestMatch) {
+                scenarioMatches.push(bestMatch);
+                // Mark these players as used
+                bestMatch.team1.forEach(p => usedPlayerIds.add(p.userId));
+                bestMatch.team2.forEach(p => usedPlayerIds.add(p.userId));
+            } else {
+                scenarioValid = false;
+                break;
+            }
+        }
+        
+        // Evaluate this scenario
+        if (scenarioValid && scenarioMatches.length === numMatches) {
+            const scenarioScore = calculateScenarioScore(scenarioMatches);
+            
+            if (scenarioScore < bestScenarioScore) {
+                bestScenarioScore = scenarioScore;
+                bestScenario = scenarioMatches;
+            }
+        }
+        
+        // Log progress every 10 scenarios
+        if (debug && (scenarioIndex + 1) % 10 === 0) {
+            await debug.info(`**Test Matchmaking**: Evaluated ${scenarioIndex + 1}/${numScenarios} scenarios, best score: ${bestScenarioScore.toFixed(2)}`);
+        }
+    }
+    
+    if (!bestScenario) {
+        if (debug) {
+            await debug.error('**Test Matchmaking**: Failed to create valid matchmaking scenario');
+        }
+        return [];
+    }
+    
+    if (debug) {
+        await debug.success(`**Test Matchmaking**: Created ${bestScenario.length} matches with scenario score: ${bestScenarioScore.toFixed(2)}`);
+    }
+    
+    // Apply final optimization pass - swap players between teams to minimize MMR differences
+    if (debug) {
+        await debug.info('**Test Matchmaking**: Starting final optimization pass...');
+    }
+    const optimizedMatches = await finalOptimizationPass(bestScenario, debug);
+    
+    if (debug) {
+        await debug.success('**Test Matchmaking**: Final optimization complete!');
+    }
+    return optimizedMatches;
+}
+
+// Calculate score for entire scenario (all matches combined)
+function calculateScenarioScore(matches) {
+    let totalScore = 0;
+    
+    for (const match of matches) {
+        totalScore += calculateMatchScore(match);
+    }
+    
+    return totalScore;
+}
+
+// Final optimization pass: try swapping players between teams to reduce MMR differences
+async function finalOptimizationPass(matches, debug) {
+    const roles = ['Top', 'Jungle', 'Mid', 'AD', 'Support'];
+    let improved = true;
+    let passCount = 0;
+    const maxPasses = 10;
+    
+    while (improved && passCount < maxPasses) {
+        improved = false;
+        passCount++;
+        
+        for (let matchIndex = 0; matchIndex < matches.length; matchIndex++) {
+            const match = matches[matchIndex];
+            const currentDiff = Math.abs(match.team1MMR - match.team2MMR);
+            
+            // Try swapping each role between teams
+            for (const role of roles) {
+                const team1Player = match.team1.find(p => p.assignedRole === role);
+                const team2Player = match.team2.find(p => p.assignedRole === role);
+                
+                if (!team1Player || !team2Player) continue;
+                
+                // Calculate new MMRs if we swap these players
+                const newTeam1MMR = match.team1MMR - team1Player.effectiveMMR + team2Player.effectiveMMR;
+                const newTeam2MMR = match.team2MMR - team2Player.effectiveMMR + team1Player.effectiveMMR;
+                const newDiff = Math.abs(newTeam1MMR - newTeam2MMR);
+                
+                // Also consider if swapping improves role assignments
+                const team1NewRoleScore = getRoleScore(team2Player, role);
+                const team2NewRoleScore = getRoleScore(team1Player, role);
+                const team1OldRoleScore = getRoleScore(team1Player, role);
+                const team2OldRoleScore = getRoleScore(team2Player, role);
+                
+                const roleScoreImprovement = (team1OldRoleScore + team2OldRoleScore) - (team1NewRoleScore + team2NewRoleScore);
+                
+                // Swap if it reduces MMR difference or significantly improves role assignments
+                if (newDiff < currentDiff || (newDiff === currentDiff && roleScoreImprovement > 0)) {
+                    // Perform the swap
+                    const team1Index = match.team1.findIndex(p => p.assignedRole === role);
+                    const team2Index = match.team2.findIndex(p => p.assignedRole === role);
+                    
+                    // Swap players but keep role assignments
+                    const temp = match.team1[team1Index];
+                    match.team1[team1Index] = assignPlayerToRole(team2Player, role);
+                    match.team2[team2Index] = assignPlayerToRole(temp, role);
+                    
+                    // Update MMRs
+                    match.team1MMR = newTeam1MMR;
+                    match.team2MMR = newTeam2MMR;
+                    
+                    improved = true;
+                    if (debug) {
+                        await debug.info(`**Test Optimization**: Match ${matchIndex + 1} - Swapped ${role} players, MMR diff: ${currentDiff} → ${newDiff}`);
+                    }
                 }
             }
         }
         
-        // If no match found in optimization, try once more with autofill enabled
-        if (!bestMatch) {
-            if (debug) {
-                await debug.warn(`**Test Matchmaking**: No valid match found in 100 iterations for match ${matchIndex + 1}, trying with autofill...`);
-            }
-            const shuffled = [...matchPlayers].sort(() => Math.random() - 0.5);
-            bestMatch = await createMatch(shuffled, debug, true); // Enable autofill
-        }
-        
-        if (bestMatch) {
-            matches.push(bestMatch);
-            if (debug) {
-                await debug.success(`**Test Matchmaking**: Successfully created match ${matchIndex + 1}`);
-            }
-        } else {
-            if (debug) {
-                await debug.error(`**Test Matchmaking**: Failed to create match ${matchIndex + 1} - running detailed analysis...`);
-                // Run one more time with debug to see why it failed
-                const shuffled = [...matchPlayers].sort(() => Math.random() - 0.5);
-                await createMatch(shuffled, debug);
-            }
+        if (improved && debug) {
+            await debug.info(`**Test Optimization**: Pass ${passCount} completed with improvements`);
         }
     }
     
     if (debug) {
-        await debug.info(`**Test Matchmaking**: Final result: Created ${matches.length} matches out of ${numMatches} requested`);
+        await debug.info(`**Test Optimization**: Completed ${passCount} optimization passes`);
     }
     return matches;
 }
@@ -474,18 +573,32 @@ function assignPlayerToRole(player, role) {
 function calculateMatchScore(match) {
     const mmrDiff = Math.abs(match.team1MMR - match.team2MMR);
     
-    // Count autofills and secondary roles
-    const team1Penalties = match.team1.reduce((sum, p) => {
-        if (p.roleType === 'autofill') return sum + 100;
-        if (p.roleType === 'secondary') return sum + 10;
-        return sum;
-    }, 0);
+    // Count autofills and secondary roles for each team
+    const team1Autofills = match.team1.filter(p => p.roleType === 'autofill').length;
+    const team2Autofills = match.team2.filter(p => p.roleType === 'autofill').length;
+    const team1Secondaries = match.team1.filter(p => p.roleType === 'secondary').length;
+    const team2Secondaries = match.team2.filter(p => p.roleType === 'secondary').length;
     
-    const team2Penalties = match.team2.reduce((sum, p) => {
-        if (p.roleType === 'autofill') return sum + 100;
-        if (p.roleType === 'secondary') return sum + 10;
-        return sum;
-    }, 0);
+    // Total autofills and secondaries (want to minimize these)
+    const totalAutofills = team1Autofills + team2Autofills;
+    const totalSecondaries = team1Secondaries + team2Secondaries;
     
-    return mmrDiff + team1Penalties + team2Penalties;
+    // Imbalance between teams (want teams to have similar numbers of autofills/secondaries)
+    const autofillImbalance = Math.abs(team1Autofills - team2Autofills);
+    const secondaryImbalance = Math.abs(team1Secondaries - team2Secondaries);
+    
+    // Scoring weights (prioritize in this order):
+    // 1. Minimize total autofills (most important)
+    // 2. Balance autofills between teams
+    // 3. Minimize total secondaries
+    // 4. Balance secondaries between teams
+    // 5. Minimize MMR difference
+    const score = 
+        (totalAutofills * 1000) +           // Heavily penalize autofills
+        (autofillImbalance * 500) +         // Heavily penalize autofill imbalance
+        (totalSecondaries * 100) +          // Moderately penalize secondaries
+        (secondaryImbalance * 50) +         // Moderately penalize secondary imbalance
+        mmrDiff;                            // Finally consider MMR difference
+    
+    return score;
 }

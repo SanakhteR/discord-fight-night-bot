@@ -1,4 +1,4 @@
-app = "discord-fight-night-bot"
+app = "discord-fight-night-bot-andre"
 primary_region = "dfw"
 
 [build]
@@ -9,18 +9,7 @@ primary_region = "dfw"
 [processes]
   app = "node index.js"
 
-[[services]]
-  internal_port = 3000
-  processes = ["app"]
-  protocol = "tcp"
-
-  [[services.ports]]
-    port = 80
-    handlers = ["http"]
-
-  [[services.ports]]
-    port = 443
-    handlers = ["tls", "http"]
+# Discord bot doesn't need HTTP services - it connects via WebSocket
 
 [mounts]
   source = "bot_data"

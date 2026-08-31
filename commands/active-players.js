@@ -50,11 +50,19 @@ module.exports = {
                     const playerInfo = {
                         displayName: member ? member.displayName : player.displayName,
                         username: player.username,
-                        joinTime: new Date(player.joinTime).toLocaleTimeString(),
+                        joinTime: new Date(player.joinTime).toLocaleTimeString('en-US', { 
+                            timeZone: 'America/Los_Angeles',
+                            hour12: true,
+                            hour: 'numeric',
+                            minute: '2-digit',
+                            second: '2-digit'
+                        }),
                         riotId: sheetData ? sheetData.riotId : 'Not found',
                         mmr: sheetData ? sheetData.mmr : 'N/A',
                         primaryRole: sheetData ? sheetData.primaryRole : 'N/A',
-                        secondaryRole: sheetData ? sheetData.secondaryRole : 'N/A'
+                        secondaryRole: sheetData ? sheetData.secondaryRole : 'N/A',
+                        realName: sheetData ? sheetData.realName : 'N/A',
+                        isRioter: sheetData ? sheetData.isRioter : false
                     };
                     
                     playerDetails.push(playerInfo);
@@ -64,27 +72,26 @@ module.exports = {
                     playerDetails.push({
                         displayName: player.displayName,
                         username: player.username,
-                        joinTime: new Date(player.joinTime).toLocaleTimeString(),
+                        joinTime: new Date(player.joinTime).toLocaleTimeString('en-US', { 
+                            timeZone: 'America/Los_Angeles',
+                            hour12: true,
+                            hour: 'numeric',
+                            minute: '2-digit',
+                            second: '2-digit'
+                        }),
                         riotId: 'Error loading',
                         mmr: 'N/A',
                         primaryRole: 'N/A',
-                        secondaryRole: 'N/A'
+                        secondaryRole: 'N/A',
+                        realName: 'N/A',
+                        isRioter: false
                     });
                 }
             }
             
-            // Build message with detailed information
+            // Build formatted table message
             let message = `📋 **Active Players List** (${activePlayersList.length} players)\n\n`;
-            
-            for (let i = 0; i < playerDetails.length; i++) {
-                const player = playerDetails[i];
-                message += `**${i + 1}. ${player.displayName}** (@${player.username})\n`;
-                message += `   🎮 **Riot ID:** ${player.riotId}\n`;
-                message += `   📊 **MMR:** ${player.mmr}\n`;
-                message += `   🎯 **Primary Role:** ${player.primaryRole}\n`;
-                message += `   🔄 **Secondary Role:** ${player.secondaryRole}\n`;
-                message += `   ⏰ **Joined at:** ${player.joinTime}\n\n`;
-            }
+            message += formatActivePlayersTable(playerDetails);
             
             // Check message length and chunk if necessary
             if (message.length > 2000) {
@@ -111,3 +118,28 @@ module.exports = {
         }
     }
 };
+
+function formatActivePlayersTable(playerDetails) {
+    if (playerDetails.length === 0) {
+        return 'No players currently active.';
+    }
+    
+    let formatted = '';
+    
+    for (let i = 0; i < playerDetails.length; i++) {
+        const player = playerDetails[i];
+        const counter = i + 1;
+        const displayName = player.displayName || 'N/A';
+        const username = player.username || 'N/A';
+        const realName = player.realName || 'N/A';
+        const riotId = player.riotId || 'N/A';
+        const mmr = player.mmr ? player.mmr.toString() : 'N/A';
+        const joinTime = player.joinTime || 'N/A';
+        const rioterBadge = player.isRioter ? '🔷 ' : '';
+        
+        // Format: Counter - Rioter Badge Discord Display Name (Discord User Name / Real Name / Riot ID) - MMR - Join time
+        formatted += `${counter} - ${rioterBadge}${displayName} (${username} / ${realName} / ${riotId}) - MMR: ${mmr} - ${joinTime}\n`;
+    }
+    
+    return formatted;
+}
