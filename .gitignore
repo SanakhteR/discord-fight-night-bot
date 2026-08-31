@@ -5,6 +5,9 @@ node_modules/
 .env
 google-service-account-base64.txt
 credentials.json
+credentials.json.json
+credentials.b64.txt
+test-google-auth.js
 
 # Backups directory
 backups/
