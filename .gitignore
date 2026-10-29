@@ -12,6 +12,9 @@ test-google-auth.js
 # Backups directory
 backups/
 
+# Local runtime data (SQLite DB, persisted schedules). On Fly this lives on a volume.
+data/
+
 # Logs
 *.log
 npm-debug.log*

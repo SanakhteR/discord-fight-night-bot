@@ -1,8 +1,5 @@
 const { SlashCommandBuilder } = require('discord.js');
-const cron = require('node-cron');
-const { GoogleSheetsService } = require('../services/googleSheets');
-
-const googleSheetsService = new GoogleSheetsService();
+const { startSeasonSchedule } = require('../services/seasonScheduler');
 
 // Map day names to cron day numbers (0 = Sunday, 1 = Monday, etc.)
 const DAY_MAP = {
@@ -78,85 +75,8 @@ module.exports = {
             const hour = parseInt(timeMatch[1]);
             const minute = parseInt(timeMatch[2]);
 
-            // Stop existing schedule if any
-            if (interaction.client.seasonSchedule) {
-                interaction.client.seasonSchedule.stop();
-                console.log('Stopped existing Fight Night season schedule');
-            }
-
-            // Create cron expression for PST timezone
-            // Cron format: minute hour * * dayOfWeek
-            const cronExpression = `${minute} ${hour} * * ${dayOfWeek}`;
-            
-            console.log(`Setting up Fight Night season schedule: ${cronExpression} (PST)`);
-
-            // Create the scheduled task
-            const task = cron.schedule(cronExpression, async () => {
-                try {
-                    console.log('Running scheduled Fight Night season reminder...');
-                    
-                    const guild = interaction.client.guilds.cache.get(process.env.GUILD_ID);
-                    if (!guild) {
-                        console.error('Guild not found for scheduled message');
-                        return;
-                    }
-
-                    const generalChannel = guild.channels.cache.find(ch => ch.name === 'fight-night-general');
-                    if (!generalChannel) {
-                        console.error('fight-night-general channel not found');
-                        return;
-                    }
-
-                    // Get top players by score
-                    const topPlayers = await googleSheetsService.getTopPlayersByScore(10);
-                    
-                    let message = '🎮 **FIGHT NIGHT REMINDER** 🎮\n\n';
-                    message += '⚔️ Fight Night is happening soon! Get ready to compete! ⚔️\n\n';
-
-                    if (topPlayers.length > 0) {
-                        message += '🏆 **Current Season Leaderboard - Top Players:**\n\n';
-                        
-                        for (let i = 0; i < topPlayers.length; i++) {
-                            const player = topPlayers[i];
-                            const rank = i + 1;
-                            const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : '  ';
-                            const rioterBadge = player.isRioter ? '🔷 ' : '';
-                            
-                            message += `${medal} **#${rank}** - ${rioterBadge}${player.realName} (${player.riotId}) - **${player.score} points**\n`;
-                        }
-                        
-                        message += '\n';
-                    }
-
-                    message += '📍 Join the **Fight Night Staging Area** voice channel to participate, or use the /check-in command!\n';
-                    message += '📝 Check-in is now **OPEN** — use `/check-in` to join the Active Players List!';
-
-                    await generalChannel.send(message);
-                    console.log('Successfully sent Fight Night season reminder');
-
-                    // Turn /check-in ON for 8 hours
-                    const client = interaction.client;
-                    client.checkInOpen = true;
-                    if (client.checkInAutoOffTimeout) {
-                        clearTimeout(client.checkInAutoOffTimeout);
-                    }
-                    const EIGHT_HOURS_MS = 8 * 60 * 60 * 1000;
-                    client.checkInAutoOffTimeout = setTimeout(() => {
-                        client.checkInOpen = false;
-                        client.checkInAutoOffTimeout = null;
-                        console.log('Auto-disabled /check-in after 8 hours (silent)');
-                    }, EIGHT_HOURS_MS);
-                    console.log('Enabled /check-in for 8 hours via Fight Night season schedule');
-
-                } catch (error) {
-                    console.error('Error sending scheduled Fight Night reminder:', error);
-                }
-            }, {
-                timezone: 'America/Los_Angeles' // PST/PDT timezone
-            });
-
-            // Store the task in the client
-            interaction.client.seasonSchedule = task;
+            // Create + persist the weekly schedule (survives bot restarts).
+            startSeasonSchedule(interaction.client, { hour, minute, dayOfWeek, timeInput, dayInput });
 
             // Get full day name for display
             const fullDayName = Object.keys(DAY_MAP).find(key => 

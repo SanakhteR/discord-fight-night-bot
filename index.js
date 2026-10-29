@@ -1,6 +1,7 @@
 const { Client, GatewayIntentBits, Events, Collection, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { GoogleSheetsService } = require('./services/googleSheets');
 const cron = require('node-cron');
+const { restoreSchedules } = require('./services/seasonScheduler');
 
 const googleSheetsService = new GoogleSheetsService();
 const fs = require('fs');
@@ -106,6 +107,14 @@ client.once(Events.Ready, async () => {
         }
     } catch (error) {
         console.error('Error initializing voice channel monitoring:', error);
+    }
+
+    // Restore any persisted weekly season / off-season schedules so they survive
+    // bot restarts and Fly machine replacements.
+    try {
+        restoreSchedules(client);
+    } catch (error) {
+        console.error('Error restoring Fight Night schedules:', error);
     }
 });
 

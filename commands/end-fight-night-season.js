@@ -1,4 +1,5 @@
 const { SlashCommandBuilder } = require('discord.js');
+const { stopSeasonSchedule } = require('../services/seasonScheduler');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -29,9 +30,8 @@ module.exports = {
                 });
             }
 
-            // Stop the schedule
-            interaction.client.seasonSchedule.stop();
-            interaction.client.seasonSchedule = null;
+            // Stop the schedule and clear the persisted config
+            stopSeasonSchedule(interaction.client);
 
             await interaction.editReply({
                 content: '✅ **Fight Night Season Ended!**\n\n' +
